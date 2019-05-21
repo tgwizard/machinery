@@ -28,8 +28,8 @@ type Broker struct {
 	password          string
 	db                int
 	pool              *redis.Pool
-	stopReceivingChan chan int
-	stopDelayedChan   chan int
+	stopReceivingChan chan struct{}
+	stopDelayedChan   chan struct{}
 	processingWG      sync.WaitGroup // use wait group to make sure task processing completes on interrupt signal
 	receivingWG       sync.WaitGroup
 	delayedWG         sync.WaitGroup
@@ -69,8 +69,8 @@ func (b *Broker) StartConsuming(consumerTag string, concurrency int, taskProcess
 	}
 
 	// Channels and wait groups used to properly close down goroutines
-	b.stopReceivingChan = make(chan int)
-	b.stopDelayedChan = make(chan int)
+	b.stopReceivingChan = make(chan struct{})
+	b.stopDelayedChan = make(chan struct{})
 	b.receivingWG.Add(1)
 	b.delayedWG.Add(1)
 
@@ -96,6 +96,10 @@ func (b *Broker) StartConsuming(consumerTag string, concurrency int, taskProcess
 			// A way to stop this goroutine from b.StopConsuming
 			case <-b.stopReceivingChan:
 				return
+			default:
+			}
+
+			select {
 			case <-pool:
 				task, _ := b.nextTask(getQueue(b.GetConfig(), taskProcessor))
 				//TODO: should this error be ignored?
@@ -118,6 +122,10 @@ func (b *Broker) StartConsuming(consumerTag string, concurrency int, taskProcess
 			// A way to stop this goroutine from b.StopConsuming
 			case <-b.stopDelayedChan:
 				return
+			default:
+			}
+
+			select {
 			default:
 				task, err := b.nextDelayedTask(redisDelayedTasksKey)
 				if err != nil {
@@ -151,12 +159,12 @@ func (b *Broker) StartConsuming(consumerTag string, concurrency int, taskProcess
 // StopConsuming quits the loop
 func (b *Broker) StopConsuming() {
 	// Stop the receiving goroutine
-	b.stopReceivingChan <- 1
+	close(b.stopReceivingChan)
 	// Waiting for the receiving goroutine to have stopped
 	b.receivingWG.Wait()
 
 	// Stop the delayed tasks goroutine
-	b.stopDelayedChan <- 1
+	close(b.stopDelayedChan)
 	// Waiting for the delayed tasks goroutine to have stopped
 	b.delayedWG.Wait()
 
